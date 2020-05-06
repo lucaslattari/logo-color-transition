@@ -1,6 +1,8 @@
 import numpy as np
-import cv2, random, operator
+import cv2, random, glob, sys, os.path
 from tqdm import tqdm
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+from argparse import ArgumentParser
 
 def showImage(img):
     from matplotlib import pyplot as plt
@@ -75,12 +77,14 @@ def getInterpColor(firstColor, secondColor, tInterp):
 
     return colorTInterp
 
-def computeLogoAnimation(maxIndex, diffColorArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, filenameVideo):
+def computeSingleLogoAnimation(maxIndex, diffColorArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, filenameVideo, args):
+    hLogo, wLogo = logoBW.shape
     fourcc = cv2.VideoWriter_fourcc('X', 'V', 'I', 'D')
-    out = cv2.VideoWriter(filenameVideo, fourcc, 20.0, (wLogo, hLogo * 5))
+    out = cv2.VideoWriter(filenameVideo, fourcc, 20.0, (int(wLogo * args.widthLogo), int(hLogo * args.heightLogo)))
     frames = 0
 
     maxValueDiffArray = diffColorArray[maxIndex]
+    print(diffColorArray, maxValueDiffArray)
     for i in tqdm(range(0, maxValueDiffArray)):
         startInterpFrontB = diffColorArray[0] / maxValueDiffArray
         startInterpFrontG = diffColorArray[1] / maxValueDiffArray
@@ -108,82 +112,122 @@ def computeLogoAnimation(maxIndex, diffColorArray, firstFrontColor, secondFrontC
         colorTInterFront = getInterpColor(firstFrontColor, secondFrontColor, [tInterpFrontB, tInterpFrontG, tInterpFrontR])
         colorTInterBack = getInterpColor(firstBackColor, secondBackColor, [tInterpBackB, tInterpBackG, tInterpBackR])
 
-        #print(colorTInterFront, [tInterpFrontB, tInterpFrontG, tInterpFrontR])
-
-        hNewImage, wNewImage = logoBW.shape
-        newImage = np.zeros((hNewImage * 5, wNewImage, 3), np.uint8)
+        newImage = np.zeros((int(hLogo * args.heightLogo), int(wLogo * args.widthLogo), 3), np.uint8)
         newImage[:] = colorTInterBack
 
-        for y in range(0, hNewImage):
-            for x in range(0, wNewImage):
+        for y in range(0, hLogo):
+            for x in range(0, wLogo):
                 if logoBW[y][x] == 0:
-                    newImage[int(y + hNewImage * 3.5)][x] = colorTInterFront[0], colorTInterFront[1], colorTInterFront[2]
-                else:
-                    newImage[int(y + hNewImage * 3.5)][x] = colorTInterBack[0], colorTInterBack[1], colorTInterBack[2]
+                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][0] = colorTInterFront[0]
+                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][1] = colorTInterFront[1]
+                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][2] = colorTInterFront[2]
 
         out.write(newImage)
-        #cv2.imwrite(str(frames) + ".png", newImage)
-        #print(firstFrontColor, colorTInterFront, secondFrontColor)
-        #print(firstBackColor, colorTInterBack, secondBackColor)
 
         frames += 1
+
+    #para a transição não ficar tão abrupta
+    for i in range(0, 10 * 20):
+        newImage = np.zeros((int(hLogo * args.heightLogo), int(wLogo * args.widthLogo), 3), np.uint8)
+        newImage[:] = secondBackColor
+
+        for y in range(0, hLogo):
+            for x in range(0, wLogo):
+                if logoBW[y][x] == 0:
+                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)] = secondFrontColor
+        out.write(newImage)
     out.release()
 
-    '''
-        print("front b", firstFrontColor[0], secondFrontColor[0], tInterpFrontB, startInterpFrontB, endInterpFrontB)
-        print("front g", firstFrontColor[1], secondFrontColor[1], tInterpFrontG, startInterpFrontG, endInterpFrontG)
-        print("front r", firstFrontColor[2], secondFrontColor[2], tInterpFrontR, startInterpFrontR, endInterpFrontR)
-        print("back b", firstBackColor[0], secondBackColor[0], tInterpBackB, startInterpBackB, endInterpBackB)
-        print("back g", firstBackColor[1], secondBackColor[1], tInterpBackG, startInterpBackG, endInterpBackG)
-        print("back r", firstBackColor[2], secondBackColor[2], tInterpBackR, startInterpBackR, endInterpBackR)
-        print("current interp constant", i / maxValueDiffArray)
-    '''
+def getBinaryLogo(logoFilename):
+    #carrega logo
+    logo = cv2.imread(logoFilename, 0)
+    hLogo, wLogo = logo.shape
 
-#carrega logo
-logo = cv2.imread("ud.png", 0)
-hLogo, wLogo = logo.shape
+    dim = (int(wLogo * 0.5), int(hLogo * 0.5))
+    logo = cv2.resize(logo, dim)
 
-dim = (int(wLogo * 0.5), int(hLogo * 0.5))
-logo = cv2.resize(logo, dim)
-hLogo, wLogo = logo.shape
+    _, logoBW = cv2.threshold(logo, 127, 255, cv2.THRESH_BINARY)
 
-_, logoBW = cv2.threshold(logo, 127, 255, cv2.THRESH_BINARY)
+    return logoBW
 
-best_colors_rgb = generateRGBArray()
+def mergeClips():
+    clipFilenames = glob.glob("*.avi")
+    clipFiles = []
 
-totalVideos = 0
-while(1):
-    #gera primeiro logo
-    firstFrontColorIndex, firstBackColorIndex = getRandomColor(best_colors_rgb)
-    if totalVideos == 0:
-        firstFrontColor, firstBackColor = best_colors_rgb[firstFrontColorIndex], best_colors_rgb[firstBackColorIndex]
-    else:
-        firstFrontColor = secondFrontColor
-        firstBackColor = secondBackColor
-    firstLogoImage = generateRandomLogo(wLogo, hLogo, firstFrontColor, firstBackColor, logoBW)
+    for i in tqdm(range(0, len(clipFilenames))):
+        clipFiles.append(VideoFileClip(str(i) + ".avi"))
 
-    #gera segundo logo
-    secondFrontColorIndex, secondBackColorIndex = getRandomColor(best_colors_rgb)
-    secondFrontColor, secondBackColor = best_colors_rgb[secondFrontColorIndex], best_colors_rgb[secondBackColorIndex]
-    while firstFrontColorIndex == secondFrontColorIndex or firstBackColorIndex == secondBackColorIndex:
+    final_clip = concatenate_videoclips(clipFiles)
+    final_clip.write_videofile("final.mp4")
+
+def computeEntireAnimation(args):
+    logoBW = getBinaryLogo(args.logoFilename)
+    hLogo, wLogo = logoBW.shape
+
+    best_colors_rgb = generateRGBArray()
+
+    for countVideos in range(0, args.countTransitions):
+        #gera primeiro logo
+        firstFrontColorIndex, firstBackColorIndex = getRandomColor(best_colors_rgb)
+        if countVideos == 0:
+            firstFrontColor, firstBackColor = best_colors_rgb[firstFrontColorIndex], best_colors_rgb[firstBackColorIndex]
+        else:
+            firstFrontColor = secondFrontColor
+            firstBackColor = secondBackColor
+        firstLogoImage = generateRandomLogo(wLogo, hLogo, firstFrontColor, firstBackColor, logoBW)
+
+        #gera segundo logo
         secondFrontColorIndex, secondBackColorIndex = getRandomColor(best_colors_rgb)
         secondFrontColor, secondBackColor = best_colors_rgb[secondFrontColorIndex], best_colors_rgb[secondBackColorIndex]
-    secondLogoImage = generateRandomLogo(wLogo, hLogo, secondFrontColor, secondBackColor, logoBW)
+        while firstFrontColor == secondFrontColor or firstBackColor == secondBackColor:
+            secondFrontColorIndex, secondBackColorIndex = getRandomColor(best_colors_rgb)
+            secondFrontColor, secondBackColor = best_colors_rgb[secondFrontColorIndex], best_colors_rgb[secondBackColorIndex]
+        secondLogoImage = generateRandomLogo(wLogo, hLogo, secondFrontColor, secondBackColor, logoBW)
 
-    #computa a diferença entre as cores
-    diffFront = map(lambda x, y: abs(x - y), firstFrontColor, secondFrontColor)
-    diffFrontB, diffFrontG, diffFrontR = diffFront
-    diffBack = map(lambda x, y: abs(x - y), firstBackColor, secondBackColor)
-    diffBackB, diffBackG, diffBackR = diffBack
-    diffArray = np.array([diffFrontB, diffFrontG, diffFrontR, diffBackB, diffBackG, diffBackR])
-    maxIndices = np.where(diffArray == np.amax(diffArray))
-    #print(len(maxIndices), diffArray)
+        #computa a diferença entre as cores
+        diffFront = map(lambda x, y: abs(x - y), firstFrontColor, secondFrontColor)
+        diffFrontB, diffFrontG, diffFrontR = diffFront
+        diffBack = map(lambda x, y: abs(x - y), firstBackColor, secondBackColor)
+        diffBackB, diffBackG, diffBackR = diffBack
+        diffArray = np.array([diffFrontB, diffFrontG, diffFrontR, diffBackB, diffBackG, diffBackR])
+        maxIndices = np.where(diffArray == np.amax(diffArray))
 
-    if(len(maxIndices) == 1):
-        maxIndex = maxIndices[0]
-    else:
-        maxIndex = maxIndices[0][0]
-    print(maxIndex, type(maxIndex))
+        if(len(maxIndices) == 1):
+            maxIndex = maxIndices[0]
+        else:
+            maxIndex = maxIndices[0][0]
+        print(maxIndex)
 
-    computeLogoAnimation(maxIndex[0], diffArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, str(totalVideos) + ".avi")
-    totalVideos += 1
+        computeSingleLogoAnimation(maxIndex[0], diffArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, str(countVideos) + ".avi", args)
+
+def parse_args():
+    parser = ArgumentParser(description = 'Cria animação de transição de cores com logos')
+    parser.add_argument('logoFilename', help = 'Caminho do logo (deve ser imagem binária com só 2 cores, preto e branco)')
+    parser.add_argument('countTransitions', type = int, help = 'Total de transições que serão criadas')
+    parser.add_argument('--h', action = 'store', dest = 'heightLogo', type = float, default = 5.0, required = False,
+                        help = 'Altura do logo no vídeo')
+    parser.add_argument('--w', action = 'store', dest = 'widthLogo', type = float, default = 1.0, required = False,
+                        help = 'Largura do logo no vídeo')
+    parser.add_argument('-ph', action = 'store', dest = 'positionHeightLogo', type = float, default = 3.0, required = False,
+                        help = 'Altura do logo no vídeo')
+    parser.add_argument('-pw', action = 'store', dest = 'positionWidthLogo', type = float, default = 0.0, required = False,
+                        help = 'Largura do logo no vídeo')
+
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    return parser.parse_args()
+
+def main():
+    arguments = parse_args()
+
+    if not os.path.exists(arguments.logoFilename):
+        print(f'{arguments.logoFilename} não existe (not found)')
+        return
+
+    computeEntireAnimation(arguments)
+    mergeClips()
+
+if __name__ == "__main__":
+    main()
