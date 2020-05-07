@@ -42,7 +42,8 @@ def getRandomColor(best_colors_rgb):
 
     return frontColor, backColor
 
-def generateRandomLogo(width, height, frontColor, backColor, logoBW):
+def generateRandomLogo(logoBW, frontColor, backColor):
+    height, width = logoBW.shape
     logoImage = np.zeros((height, width, 3), np.uint8)
 
     for y in range(0, height):
@@ -77,14 +78,13 @@ def getInterpColor(firstColor, secondColor, tInterp):
 
     return colorTInterp
 
-def computeSingleLogoAnimation(maxIndex, diffColorArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, filenameVideo, args):
+def computeLogoInterpolation(maxIndex, diffColorArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, filenameVideo, args):
     hLogo, wLogo = logoBW.shape
     fourcc = cv2.VideoWriter_fourcc('X', 'V', 'I', 'D')
     out = cv2.VideoWriter(filenameVideo, fourcc, 20.0, (int(wLogo * args.widthLogo), int(hLogo * args.heightLogo)))
     frames = 0
 
     maxValueDiffArray = diffColorArray[maxIndex]
-    print(diffColorArray, maxValueDiffArray)
     for i in tqdm(range(0, maxValueDiffArray)):
         startInterpFrontB = diffColorArray[0] / maxValueDiffArray
         startInterpFrontG = diffColorArray[1] / maxValueDiffArray
@@ -118,12 +118,9 @@ def computeSingleLogoAnimation(maxIndex, diffColorArray, firstFrontColor, second
         for y in range(0, hLogo):
             for x in range(0, wLogo):
                 if logoBW[y][x] == 0:
-                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][0] = colorTInterFront[0]
-                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][1] = colorTInterFront[1]
-                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)][2] = colorTInterFront[2]
+                    newImage[int(y + hLogo * args.positionHeightLogo)][int(x + wLogo * args.positionWidthLogo)] = colorTInterFront
 
         out.write(newImage)
-
         frames += 1
 
     #para a transição não ficar tão abrupta
@@ -143,9 +140,7 @@ def getBinaryLogo(logoFilename):
     logo = cv2.imread(logoFilename, 0)
     hLogo, wLogo = logo.shape
 
-    dim = (int(wLogo * 0.5), int(hLogo * 0.5))
-    logo = cv2.resize(logo, dim)
-
+    #aplica a limiarização
     _, logoBW = cv2.threshold(logo, 127, 255, cv2.THRESH_BINARY)
 
     return logoBW
@@ -161,20 +156,24 @@ def mergeClips():
     final_clip.write_videofile("final.mp4")
 
 def computeEntireAnimation(args):
+    #gera a imagem em preto e branco
     logoBW = getBinaryLogo(args.logoFilename)
+    #coleta a altura e largura da imagem P&B
     hLogo, wLogo = logoBW.shape
 
+    #gera um vetor de cores RGB
     best_colors_rgb = generateRGBArray()
 
+    #para cada transição...
     for countVideos in range(0, args.countTransitions):
         #gera primeiro logo
-        firstFrontColorIndex, firstBackColorIndex = getRandomColor(best_colors_rgb)
         if countVideos == 0:
+            firstFrontColorIndex, firstBackColorIndex = getRandomColor(best_colors_rgb)
             firstFrontColor, firstBackColor = best_colors_rgb[firstFrontColorIndex], best_colors_rgb[firstBackColorIndex]
         else:
             firstFrontColor = secondFrontColor
             firstBackColor = secondBackColor
-        firstLogoImage = generateRandomLogo(wLogo, hLogo, firstFrontColor, firstBackColor, logoBW)
+        firstLogoImage = generateRandomLogo(logoBW, firstFrontColor, firstBackColor)
 
         #gera segundo logo
         secondFrontColorIndex, secondBackColorIndex = getRandomColor(best_colors_rgb)
@@ -182,7 +181,7 @@ def computeEntireAnimation(args):
         while firstFrontColor == secondFrontColor or firstBackColor == secondBackColor:
             secondFrontColorIndex, secondBackColorIndex = getRandomColor(best_colors_rgb)
             secondFrontColor, secondBackColor = best_colors_rgb[secondFrontColorIndex], best_colors_rgb[secondBackColorIndex]
-        secondLogoImage = generateRandomLogo(wLogo, hLogo, secondFrontColor, secondBackColor, logoBW)
+        secondLogoImage = generateRandomLogo(logoBW, secondFrontColor, secondBackColor)
 
         #computa a diferença entre as cores
         diffFront = map(lambda x, y: abs(x - y), firstFrontColor, secondFrontColor)
@@ -190,30 +189,29 @@ def computeEntireAnimation(args):
         diffBack = map(lambda x, y: abs(x - y), firstBackColor, secondBackColor)
         diffBackB, diffBackG, diffBackR = diffBack
         diffArray = np.array([diffFrontB, diffFrontG, diffFrontR, diffBackB, diffBackG, diffBackR])
-        maxIndices = np.where(diffArray == np.amax(diffArray))
 
+        maxIndices = np.where(diffArray == np.amax(diffArray))
         if(len(maxIndices) == 1):
             maxIndex = maxIndices[0]
         else:
             maxIndex = maxIndices[0][0]
-        print(maxIndex)
 
-        computeSingleLogoAnimation(maxIndex[0], diffArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, str(countVideos) + ".avi", args)
+        computeLogoInterpolation(maxIndex[0], diffArray, firstFrontColor, secondFrontColor, firstBackColor, secondBackColor, logoBW, str(countVideos) + ".avi", args)
 
 def parse_args():
     parser = ArgumentParser(description = 'Cria animação de transição de cores com logos')
     parser.add_argument('logoFilename', help = 'Caminho do logo (deve ser imagem binária com só 2 cores, preto e branco)')
     parser.add_argument('countTransitions', type = int, help = 'Total de transições que serão criadas')
-    parser.add_argument('--h', action = 'store', dest = 'heightLogo', type = float, default = 5.0, required = False,
-                        help = 'Altura do logo no vídeo')
+    parser.add_argument('--h', action = 'store', dest = 'heightLogo', type = float, default = 1.0, required = False, #5.0
+                        help = 'Multiplicação da altura do logo no vídeo')
     parser.add_argument('--w', action = 'store', dest = 'widthLogo', type = float, default = 1.0, required = False,
-                        help = 'Largura do logo no vídeo')
-    parser.add_argument('-ph', action = 'store', dest = 'positionHeightLogo', type = float, default = 3.0, required = False,
+                        help = 'Multiplicação da largura do logo no vídeo')
+    parser.add_argument('-ph', action = 'store', dest = 'positionHeightLogo', type = float, default = 0.0, required = False, #3.0
                         help = 'Altura do logo no vídeo')
     parser.add_argument('-pw', action = 'store', dest = 'positionWidthLogo', type = float, default = 0.0, required = False,
                         help = 'Largura do logo no vídeo')
 
-    if len(sys.argv) == 1:
+    if len(sys.argv) < 2:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
@@ -221,7 +219,6 @@ def parse_args():
 
 def main():
     arguments = parse_args()
-
     if not os.path.exists(arguments.logoFilename):
         print(f'{arguments.logoFilename} não existe (not found)')
         return
